@@ -44,23 +44,6 @@ else
     echo "⚠️ Skipping SSH security modifications."
 fi
 
-# Prompt user to configure terminal prompt
-echo "🖥️ Configuring terminal prompt style..."
-echo "Select a prompt style:"
-echo "1) user@host:dir (default)"
-echo "2) user@host"
-echo "3) host:dir"
-echo "4) host"
-read -rp "Enter your choice [1-4]: " prompt_choice
-
-# Assign prompt style based on choice
-case "$prompt_choice" in
-    2) PS1='\u@\h$ ';;
-    3) PS1='\h:\w$ ';;
-    4) PS1='\h$ ';;
-    *) PS1='\u@\h:\w$ ';;
-esac
-
 # Configure .bashrc
 echo -e "\033[1;33m🎨 Configuring .bashrc...\033[0m"
 
@@ -74,9 +57,10 @@ case "\$TERM" in
 esac
 
 # Apply user-chosen PS1 style
-PS1='$PS1'
+PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 EOF
 
+source ~/.bashrc
 echo "✅ Terminal prompt style set!"
 
 # Enable color prompt for better visibility
