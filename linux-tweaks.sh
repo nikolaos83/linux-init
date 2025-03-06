@@ -52,12 +52,6 @@ echo "2) user@host"
 echo "3) host:dir"
 echo "4) host"
 read -rp "Enter your choice [1-4]: " prompt_choice
-case "$prompt_choice" in
-    2) PS1='\u@\h$ ';;
-    3) PS1='\h:\w$ ';;
-    4) PS1='\h$ ';;
-    *) PS1='\u@\h:\w$ ';;
-esac
 
 # Assign prompt style based on choice
 case "$prompt_choice" in
