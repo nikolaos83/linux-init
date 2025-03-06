@@ -52,6 +52,8 @@ echo "2) user@host"
 echo "3) host:dir"
 echo "4) host"
 read -rp "Enter your choice [1-4]: " prompt_choice
+
+# Assign prompt style based on choice
 case "$prompt_choice" in
     2) PS1='\u@\h$ ';;
     3) PS1='\h:\w$ ';;
@@ -61,14 +63,19 @@ esac
 
 # Configure .bashrc
 echo -e "\033[1;33m🎨 Configuring .bashrc...\033[0m"
-echo '# If this is an xterm set the title to user@host:dir' >> /root/.bashrc
-echo 'case "$TERM" in' >> /root/.bashrc
-echo 'xterm*|rxvt*)' >> /root/.bashrc
-echo '    PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"' >> /root/.bashrc
-echo '    ;;' >> /root/.bashrc
-echo '*)' >> /root/.bashrc
-echo '    ;;' >> /root/.bashrc
-echo 'esac' >> /root/.bashrc
+
+cat <<EOF >> /root/.bashrc
+
+# If this is an xterm, set the title and prompt
+case "\$TERM" in
+    xterm*|rxvt*|xterm-256color)
+        PROMPT_COMMAND='echo -ne "\033]0;$(printf "%s" "\${debian_chroot:+(\$debian_chroot)}\$USER@\${HOSTNAME}: \${PWD}")\a"'
+        ;;
+esac
+
+# Apply user-chosen PS1 style
+PS1='$PS1'
+EOF
 
 echo "✅ Terminal prompt style set!"
 
