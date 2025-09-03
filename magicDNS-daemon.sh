@@ -19,11 +19,11 @@ echo "[*] Installing Tailscale hosts updater..."
 if ! command -v jq >/dev/null; then
   echo "[*] Installing jq..."
   if command -v apt-get >/dev/null; then
-    sudo apt-get update && sudo apt-get install -y jq
+    apt-get update &&  apt-get install -y jq
   elif command -v dnf >/dev/null; then
-    sudo dnf install -y jq
+    dnf install -y jq
   elif command -v yum >/dev/null; then
-    sudo yum install -y jq
+    yum install -y jq
   else
     echo "[!] Could not install jq automatically. Please install it manually."
     exit 1
@@ -31,7 +31,7 @@ if ! command -v jq >/dev/null; then
 fi
 
 # Install the updater script
-sudo tee "$SCRIPT_PATH" > /dev/null <<"EOF"
+tee "$SCRIPT_PATH" > /dev/null <<"EOF"
 #!/bin/bash
 set -euo pipefail
 
@@ -70,10 +70,10 @@ rm -f "$TMP_FILE"
 echo "[OK] /etc/hosts updated with Tailscale entries."
 EOF
 
-sudo chmod +x "$SCRIPT_PATH"
+chmod +x "$SCRIPT_PATH"
 
 # Create systemd service
-sudo tee "$SERVICE_PATH" > /dev/null <<EOF
+tee "$SERVICE_PATH" > /dev/null <<EOF
 [Unit]
 Description=Update /etc/hosts from Tailscale
 
@@ -83,7 +83,7 @@ ExecStart=$SCRIPT_PATH
 EOF
 
 # Create systemd timer
-sudo tee "$TIMER_PATH" > /dev/null <<EOF
+ tee "$TIMER_PATH" > /dev/null <<EOF
 [Unit]
 Description=Run Tailscale hosts updater every 5 minutes
 
@@ -97,11 +97,11 @@ WantedBy=timers.target
 EOF
 
 # Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable --now update-tailscale-hosts.timer
+ systemctl daemon-reload
+ systemctl enable --now update-tailscale-hosts.timer
 
 # Run once immediately
-sudo "$SCRIPT_PATH"
+ "$SCRIPT_PATH"
 
 echo "[✓] Tailscale MagicDNS daemon installed successfully."
 echo "    Check /etc/hosts for entries like 'host.uygar.live'"
