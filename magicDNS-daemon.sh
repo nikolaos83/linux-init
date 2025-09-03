@@ -32,8 +32,6 @@ fi
 
 # Install the updater script
 sudo tee "$SCRIPT_PATH" > /dev/null <<"EOF"
-
-## ========= update-tailscale-hosts.sh ===================== ##
 #!/bin/bash
 set -euo pipefail
 
@@ -71,8 +69,6 @@ mv "$HOSTS_FILE.tmp" "$HOSTS_FILE"
 rm -f "$TMP_FILE"
 
 echo "[OK] /etc/hosts updated with Tailscale entries."
-
-## ========= update-tailscale-hosts.sh ===================== ##
 EOF
 
 sudo chmod +x "$SCRIPT_PATH"
