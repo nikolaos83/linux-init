@@ -15,5 +15,5 @@ chmod +x linux-tweaks.sh
 ./linux-tweaks.sh
 ```
 ```bash
-wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/magicDNS-daemon.sh | bash
+wget -O - "https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/magicDNS-daemon.sh?$(date +%s)" | bash
 ```
