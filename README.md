@@ -19,4 +19,5 @@ wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/mai
 ```
 ```bash
 powershell -ExecutionPolicy Bypass -File .\update-tailscale-hosts.ps1
+powershell -ExecutionPolicy Bypass -File .\update-tailscale-hosts-persistence.ps1
 ```
