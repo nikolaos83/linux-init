@@ -32,6 +32,8 @@ fi
 
 # Install the updater script
 sudo tee "$SCRIPT_PATH" > /dev/null <<"EOF"
+
+## ========= update-tailscale-hosts.sh ===================== ##
 #!/bin/bash
 set -euo pipefail
 
@@ -39,22 +41,21 @@ DOMAIN="uygar.live"
 HOSTS_FILE="/etc/hosts"
 TMP_FILE="$(mktemp)"
 
-# Extract peers, skip null/empty hostnames
+# Extract peers, skip null/empty/localhost hostnames
 tailscale status --json | jq -r \
   --arg domain "$DOMAIN" '
   .Peer | to_entries[] |
-  select(.value.HostName != null and .value.HostName != "") |
-  . as $peer |
-  ($peer.value.TailscaleIPs[0] + " " + 
-   $peer.value.HostName + "." + $domain + " " + 
+  select(.value.HostName != null and .value.HostName != "" and .value.HostName != "localhost") |
+  ($peer := .) |
+  ($peer.value.TailscaleIPs[0] + " " +
+   $peer.value.HostName + "." + $domain + " " +
    $peer.value.HostName)
 ' > "$TMP_FILE"
 
-# Remove any old block between markers
+# Clean out ALL old blocks
 awk '
-  BEGIN {skip=0}
-  /^# TAILSCALE BEGIN$/ {skip=1; next}
-  /^# TAILSCALE END$/ {skip=0; next}
+  /^# TAILSCALE BEGIN/ {skip=1; next}
+  /^# TAILSCALE END/ {skip=0; next}
   skip==0 {print}
 ' "$HOSTS_FILE" > "$HOSTS_FILE.tmp"
 
@@ -70,6 +71,8 @@ mv "$HOSTS_FILE.tmp" "$HOSTS_FILE"
 rm -f "$TMP_FILE"
 
 echo "[OK] /etc/hosts updated with Tailscale entries."
+
+## ========= update-tailscale-hosts.sh ===================== ##
 EOF
 
 sudo chmod +x "$SCRIPT_PATH"
