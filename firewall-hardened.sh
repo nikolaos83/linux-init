@@ -24,13 +24,14 @@ iptables -A INPUT -p udp --dport 41641 -j ACCEPT
 ip6tables -A INPUT -p udp --dport 41641 -j ACCEPT
 
 # (Optional) allow inbound SSH (if you want NAT IPv4 port forward)
-# iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+#iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+# ICMPv6 — essential for IPv6 to work properly (Neighbour Discovery, Path MTU Discovery, etc.)
+ip6tables -A INPUT -p icmpv6 -j ACCEPT
 
 # Persistence
 apt install iptables-persistent -y
 #mkdir -p /etc/iptables
 iptables-save > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
-
-
