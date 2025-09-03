@@ -17,3 +17,6 @@ chmod +x linux-tweaks.sh
 ```bash
 wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/magicDNS-daemon.sh | bash
 ```
+```bash
+powershell -ExecutionPolicy Bypass -File .\update-tailscale-hosts.ps1
+```
