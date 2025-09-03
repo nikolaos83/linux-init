@@ -44,16 +44,15 @@ tailscale status --json | jq -r \
   --arg domain "$DOMAIN" '
   .Peer | to_entries[] |
   select(.value.HostName != null and .value.HostName != "" and .value.HostName != "localhost") |
-  ($peer := .) |
-  ($peer.value.TailscaleIPs[0] + " " +
-   $peer.value.HostName + "." + $domain + " " +
-   $peer.value.HostName)
+  (.value.TailscaleIPs[0] + " " +
+   .value.HostName + "." + $domain + " " +
+   .value.HostName)
 ' > "$TMP_FILE"
 
-# Clean out ALL old blocks
+# Remove all old Tailscale blocks
 awk '
   /^# TAILSCALE BEGIN/ {skip=1; next}
-  /^# TAILSCALE END/ {skip=0; next}
+  /^# TAILSCALE END/   {skip=0; next}
   skip==0 {print}
 ' "$HOSTS_FILE" > "$HOSTS_FILE.tmp"
 
