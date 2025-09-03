@@ -10,7 +10,9 @@ wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/mai
 wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/init-samba.sh | bash
 ```
 ```bash
-wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/linux-tweaks.sh | bash
+wget -O linux-tweaks.sh https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/linux-tweaks.sh
+chmod +x linux-tweaks.sh
+./linux-tweaks.sh
 ```
 ```bash
 wget -O - https://raw.githubusercontent.com/nikolaos83/linux-init/refs/heads/main/magicDNS-daemon.sh | bash
