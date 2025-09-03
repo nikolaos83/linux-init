@@ -25,7 +25,7 @@ ip6tables -A INPUT -p udp --dport 41641 -j ACCEPT
 
 # (Optional) allow inbound SSH (if you want NAT IPv4 port forward)
 # iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-# ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
 
 # Persistence
 iptables-save > /etc/iptables/rules.v4
