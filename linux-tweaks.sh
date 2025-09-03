@@ -1,8 +1,14 @@
 #!/bin/bash
 
-# This script enhances system security, configures the shell environment, installs useful packages,
-# and customizes the message of the day (MOTD) using figlet.
+# Enhanced host setup script
+# - SSH hardening
+# - .bashrc improvements
+# - Batch package installation
+# - Custom MOTD with figlet
 
+set -euo pipefail
+
+# ────────────────────────────────
 # Function to prompt user confirmation
 confirm() {
     while true; do
@@ -15,6 +21,7 @@ confirm() {
     done
 }
 
+# ────────────────────────────────
 # Configure user SSH keys
 GITHUB_UN="nikolaos83" # Set your Github Username accordingly
 echo -e "\033[1;33m🔒 Setting up root user SSH config...\033[0m"
@@ -23,124 +30,101 @@ chmod 700 /root/.ssh
 curl -fsSL "https://github.com/${GITHUB_UN}.keys" >> /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
-# Disable root password authentication to enhance security
+# Disable root password authentication
 echo "🔐 Checking SSH security settings..."
 SSH_CONFIG="/etc/ssh/sshd_config"
 SSH_CONFIG_DIR="/etc/ssh/sshd_config.d"
 
 if confirm "Do you want to disable root password authentication?"; then
     echo "🔒 Disabling root password authentication..."
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' "$SSH_CONFIG"
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' "$SSH_CONFIG"
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' "$SSH_CONFIG"
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSH_CONFIG"
     if [ -d "$SSH_CONFIG_DIR" ]; then
         for conf in "$SSH_CONFIG_DIR"/*.conf; do
-            [ -f "$conf" ] && sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' "$conf"
-            [ -f "$conf" ] && sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' "$conf"
+            [ -f "$conf" ] && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' "$conf"
+            [ -f "$conf" ] && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$conf"
         done
     fi
-    systemctl restart sshd  # Restart SSH service to apply changes
+    systemctl restart sshd
     echo "✅ Root password authentication disabled!"
 else
     echo "⚠️ Skipping SSH security modifications."
 fi
 
+# ────────────────────────────────
 # Configure .bashrc
 echo -e "\033[1;33m🎨 Configuring .bashrc...\033[0m"
 
-cat <<EOF >> /root/.bashrc
+cat <<'EOF' >> /root/.bashrc
 
 # If this is an xterm, set the title and prompt
-case "\$TERM" in
+case "$TERM" in
     xterm*|rxvt*|xterm-256color)
-        PROMPT_COMMAND='echo -ne "\033]0;$(printf "%s" "\${debian_chroot:+(\$debian_chroot)}\$USER@\${HOSTNAME}: \${PWD}")\a"'
+        PROMPT_COMMAND='echo -ne "\033]0;$(printf "%s" "${debian_chroot:+($debian_chroot)}$USER@${HOSTNAME}: ${PWD}")\a"'
         ;;
 esac
 
-# Apply user-chosen PS1 style
+# Custom PS1 prompt
 PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 EOF
 
-source ~/.bashrc
-echo "✅ Terminal prompt style set!"
-
-# Enable color prompt for better visibility
+# Enable color prompt + extend history
 sed -i 's/^#force_color_prompt=yes/force_color_prompt=yes/' /root/.bashrc
-
-# Increase shell history size for convenience
 sed -i 's/HISTSIZE=.*/HISTSIZE=5000/' /root/.bashrc
 sed -i 's/HISTFILESIZE=.*/HISTFILESIZE=10000/' /root/.bashrc
-
 echo "✅ .bashrc configured!"
 
-# Grouped package installation
+# ────────────────────────────────
+# Collect packages
 NETWORK_UTILITIES="wget curl net-tools"
 MONITORING_TOOLS="htop iotop sysstat iftop nethogs"
 BENCHMARK_TOOLS="sysbench speedtest-cli fio hdparm"
 FILE_TOOLS="tree unzip p7zip"
 
-# Uncomment below to add candidates:
-# CANDIDATE_PACKAGES="nmap iftop ncdu zsh vim"
-
-echo "📦 Updating package lists..."
-apt update
+ALL_PKGS=""
 
 if confirm "Do you want to install network utilities? ($NETWORK_UTILITIES)"; then
-    apt install -y $NETWORK_UTILITIES
-    echo "✅ Network utilities installed!"
-else
-    echo "⚠️ Skipping network utilities."
+    ALL_PKGS+=" $NETWORK_UTILITIES"
 fi
-
 if confirm "Do you want to install monitoring tools? ($MONITORING_TOOLS)"; then
-    apt install -y $MONITORING_TOOLS
-    echo "✅ Monitoring tools installed!"
-else
-    echo "⚠️ Skipping monitoring tools."
+    ALL_PKGS+=" $MONITORING_TOOLS"
 fi
 if confirm "Do you want to install file management tools? ($FILE_TOOLS)"; then
-    apt install -y $FILE_TOOLS
-    echo "✅ File management tools installed!"
-else
-    echo "⚠️ Skipping file management tools."
+    ALL_PKGS+=" $FILE_TOOLS"
 fi
 if confirm "Do you want to install benchmarking utilities? ($BENCHMARK_TOOLS)"; then
-    apt install -y $BENCHMARK_TOOLS
-    echo "✅ Benchmarking utilities installed!"
-else
-    echo "⚠️ Skipping benchmarking utilities."
+    ALL_PKGS+=" $BENCHMARK_TOOLS"
 fi
 
-# Prompt for MOTD message
+# Always include figlet and curl for MOTD
+ALL_PKGS+=" figlet curl"
+
+# Run package installation once
+if [ -n "$ALL_PKGS" ]; then
+    echo "📦 Installing selected packages: $ALL_PKGS"
+    apt update
+    apt install -y $ALL_PKGS
+    echo "✅ Packages installed!"
+else
+    echo "⚠️ No packages selected."
+fi
+
+# ────────────────────────────────
+# Configure MOTD
 echo "🛠️ Configuring MOTD..."
 read -rp "Enter a custom MOTD message (default: ${HOSTNAME}): " motd_message
 motd_message=${motd_message:-${HOSTNAME}}
 
-# Install dependencies
-apt install -y figlet curl
-
-# Fetch figlet font
 mkdir -p /usr/share/figlet
-curl -fsSL "https://raw.githubusercontent.com/xero/figlet-fonts/master/ANSI%20Shadow.flf" -o /usr/share/figlet/Shadow.flf
+curl -fsSL "https://raw.githubusercontent.com/xero/figlet-fonts/master/ANSI%20Shadow.flf" \
+    -o /usr/share/figlet/Shadow.flf
 
-# Detect if sudo exists and if we're running as root
-if command -v sudo &>/dev/null; then
-    SUDO="sudo"
-elif [ "$EUID" -ne 0 ]; then
-    echo "Error: You must run this script as root or have sudo installed." >&2
-    exit 1
-else
-    SUDO=""
-fi
-
-# Create MOTD script
-$SUDO tee /etc/profile.d/motd.sh >/dev/null <<EOF
+cat >/etc/profile.d/motd.sh <<EOF
+#!/bin/bash
 echo -e "\033[1;33m\n"
 figlet -f /usr/share/figlet/Shadow.flf "$motd_message"
 echo -e "\033[0m"
 EOF
+chmod +x /etc/profile.d/motd.sh
 
-# Make MOTD script executable
-$SUDO chmod +x /etc/profile.d/motd.sh
-
-# Done
 echo "🎉 Host configuration complete!"
