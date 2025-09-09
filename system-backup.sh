@@ -16,8 +16,8 @@ TIMER_FILE="/etc/systemd/system/backup-to-gdrive.timer"
 SERVICE_NAME="rclone@host"
 
 # Email settings
-EMAIL_FROM="admin@uygar.live"
-EMAIL_TO="in_solito@outlook.com"
+EMAIL_FROM=""
+EMAIL_TO=""
 
 ###########################
 # INSTALL DEPENDENCIES
