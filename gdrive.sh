@@ -52,13 +52,10 @@ exec /usr/bin/rclone mount \
     --allow-other \
     --dir-cache-time=72h \
     --poll-interval=15s \
-    --cache-dir=/var/cache/rclone \
-    --vfs-cache-mode=writes \
-    --vfs-cache-max-size=2G \
-    --vfs-cache-max-age=12h
-    --umask=002 \
     --log-file=/var/log/rclone-$INSTANCE.log \
-    --log-level=INFO
+    --umask=002 \
+    --log-level=INFO \
+    --read-only
 EOF
 
 chmod +x /usr/local/bin/rclone-mount.sh
