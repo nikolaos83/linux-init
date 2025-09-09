@@ -11,6 +11,38 @@ mkdir -p /mnt/gdrive/${HOSTNAME}
 
 curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubusercontent.com/nikolaos83/secrets/refs/heads/main/rclone.conf -o /root/.config/rclone/rclone.conf || echo "Failed to fetch rclone.conf"
 
+cat > /usr/local/bin/rclone-mount.sh << 'EOF'
+#!/bin/bash
+REMOTE=${1:?remote required}
+INSTANCE=${2:?instance required}
+CONFIG=/root/.config/rclone/rclone.conf
+
+if [ "$INSTANCE" = "common" ]; then
+    MOUNT_POINT=/mnt/gdrive/common
+    REMOTE_PATH=$REMOTE:/servers/common
+else
+    MOUNT_POINT=/mnt/gdrive/$(hostname -s)
+    REMOTE_PATH=$REMOTE:/servers/$(hostname -s)
+fi
+
+mkdir -p "$MOUNT_POINT"
+
+exec /usr/bin/rclone mount \
+    "$REMOTE_PATH" "$MOUNT_POINT" \
+    --config="$CONFIG" \
+    --allow-other \
+    --dir-cache-time=72h \
+    --poll-interval=15s \
+    --vfs-cache-mode=full \
+    --vfs-cache-max-size=10G \
+    --vfs-cache-max-age=24h \
+    --umask=002 \
+    --log-file=/var/log/rclone-$INSTANCE.log \
+    --log-level=INFO
+EOF
+
+chmod +x /usr/local/bin/rclone-mount.sh
+
 cat > "$RCLONE_SERVICE_FILE" << 'EOF'
 [Unit]
 Description=Rclone Mount (%i)
@@ -20,40 +52,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-
-# If instance is "common", mount remote:/servers/common → /mnt/gdrive/common
-# Otherwise, mount remote:/servers/%H → /mnt/gdrive/%H
-
-ExecStart=/bin/bash -lc '
-    remote="gdrive"
-    if [ "%i" = "common" ]; then
-        /usr/bin/rclone mount \
-            ${remote}:/servers/common /mnt/gdrive/common \
-            --config=/root/.config/rclone/rclone.conf \
-            --allow-other \
-            --dir-cache-time=72h \
-            --poll-interval=15s \
-            --vfs-cache-mode=full \
-            --vfs-cache-max-size=10G \
-            --vfs-cache-max-age=24h \
-            --umask=002 \
-            --log-file=/var/log/rclone-%i.log \
-            --log-level=INFO
-    else
-        /usr/bin/rclone mount \
-            ${remote}:/servers/%H /mnt/gdrive/%H \
-            --config=/root/.config/rclone/rclone.conf \
-            --allow-other \
-            --dir-cache-time=72h \
-            --poll-interval=15s \
-            --vfs-cache-mode=full \
-            --vfs-cache-max-size=10G \
-            --vfs-cache-max-age=24h \
-            --umask=002 \
-            --log-file=/var/log/rclone-%i.log \
-            --log-level=INFO
-    fi
-'
+ExecStart=/usr/local/bin/rclone-mount.sh gdrive %i
 ExecStop=/bin/bash -c '$(which fusermount) -uz /mnt/%i'
 Restart=on-failure
 RestartSec=10
