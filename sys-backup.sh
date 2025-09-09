@@ -14,6 +14,8 @@ BACKUP_SCRIPT="/usr/local/bin/backup-to-gdrive.sh"
 SERVICE_FILE="/etc/systemd/system/rclone@.service"
 TIMER_FILE="/etc/systemd/system/backup-to-gdrive.timer"
 SERVICE_NAME="rclone@host"
+RCLONE_REMOTE="gdrive"
+REMOTE_PATH="$RCLONE_REMOTE:/servers/$HOST/backups"
 
 # Email settings
 EMAIL_FROM="${HOSTNAME}-${BACKUPS_EMAIL_FROM}"
