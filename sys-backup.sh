@@ -57,7 +57,7 @@ exec /usr/bin/rclone mount \
     --dir-cache-time=72h \
     --poll-interval=15s \
     --cache-dir=/var/cache/rclone \
-    --vfs-cache-mode=full \
+    --vfs-cache-mode=writes \
     --vfs-cache-max-size=2G \
     --vfs-cache-max-age=12h
     --umask=002 \
