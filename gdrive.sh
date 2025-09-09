@@ -79,7 +79,7 @@ Restart=on-failure
 RestartSec=10
 TimeoutSec=60
 StartLimitBurst=3
-StartLimitIntervalSec=60
+#StartLimitIntervalSec=60
 # Optional: notify systemd that the service is ready
 # NotifyAccess=all
 
