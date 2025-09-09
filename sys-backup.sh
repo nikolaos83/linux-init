@@ -142,6 +142,8 @@ echo "[INFO] Pruning backups older than $KEEP_DAYS days"
 /usr/bin/rclone delete --min-age ${KEEP_DAYS}d "$REMOTE_PATH"
 
 # Email report
+EMAIL_FROM="${HOSTNAME}-${BACKUPS_EMAIL_FROM}"
+EMAIL_TO="${BACKUPS_EMAIL_TO}"
 REPORT="[INFO] Backup completed for $HOST at $TIMESTAMP"
 echo -e "$REPORT" | mail -s "$EMAIL_SUBJECT" -r "$EMAIL_FROM" "$EMAIL_TO"
 
