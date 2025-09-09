@@ -52,9 +52,10 @@ exec /usr/bin/rclone mount \
     --allow-other \
     --dir-cache-time=72h \
     --poll-interval=15s \
+    --cache-dir=/var/cache/rclone \
     --vfs-cache-mode=full \
-    --vfs-cache-max-size=10G \
-    --vfs-cache-max-age=24h \
+    --vfs-cache-max-size=2G \
+    --vfs-cache-max-age=12h
     --umask=002 \
     --log-file=/var/log/rclone-$INSTANCE.log \
     --log-level=INFO
