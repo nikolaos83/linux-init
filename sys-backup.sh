@@ -120,7 +120,7 @@ echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
 # Directories to backup
 for DIR in /home /root; do
     if [ -d "$DIR" ]; then
-        rsync -aHAX --delete "$DIR" "$BACKUP_DIR"
+        rsync -a --no-acls --no-xattrs --delete "$DIR/" "$BACKUP_DIR/$DIR_NAME/"
     fi
 done
 
