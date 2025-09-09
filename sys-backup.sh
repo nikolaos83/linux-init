@@ -15,6 +15,7 @@ SERVICE_FILE="/etc/systemd/system/rclone@.service"
 TIMER_FILE="/etc/systemd/system/backup-to-gdrive.timer"
 SERVICE_NAME="rclone@host"
 RCLONE_REMOTE="gdrive"
+HOST=$(hostname -s)
 REMOTE_PATH="$RCLONE_REMOTE:/servers/$HOST/backups"
 
 # Email settings
