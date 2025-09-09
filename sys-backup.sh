@@ -56,13 +56,10 @@ exec /usr/bin/rclone mount \
     --allow-other \
     --dir-cache-time=72h \
     --poll-interval=15s \
-    --cache-dir=/var/cache/rclone \
-    --vfs-cache-mode=writes \
-    --vfs-cache-max-size=2G \
-    --vfs-cache-max-age=12h
-    --umask=002 \
     --log-file=/var/log/rclone-$INSTANCE.log \
-    --log-level=INFO
+    --umask=002 \
+    --log-level=INFO \
+    --read-only
 EOF
 
 chmod +x "$RCLONE_SCRIPT"
@@ -109,8 +106,9 @@ HOST=$(hostname -s)
 BACKUP_ROOT="/mnt/gdrive/$HOST/backups"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-KEEP_WEEKLY=2
-KEEP_MONTHLY=2
+#KEEP_WEEKLY=2
+#KEEP_MONTHLY=2
+KEEP_DAYS=14 # Keep backups for 14 days
 
 EMAIL_SUBJECT="backups@$HOST"
 
@@ -121,17 +119,22 @@ echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
 # Directories to backup
 for DIR in /home /root; do
     DIR_NAME=$(basename "$DIR")
-    rsync -a --no-acls --no-xattrs --delete "$DIR/" "$BACKUP_DIR/$DIR_NAME/"
+    echo "[INFO] Backing up $DIR to $REMOTE_PATH/$TIMESTAMP/$DIR_NAME/"
+    /usr/bin/rclone copy "$DIR" "$REMOTE_PATH/$TIMESTAMP/$DIR_NAME/" --log-level=INFO
 done
 
 # Retention: weekly backups (last 2)
-find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
-    | sort | head -n -$KEEP_WEEKLY | xargs -r rm -rf
+#find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
+#    | sort | head -n -$KEEP_WEEKLY | xargs -r rm -rf
 
 # Retention: monthly backups (keep last 2)
-find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
-    | sort -r | awk -F'T' '{print $1}' | uniq -d | tail -n +$(($KEEP_MONTHLY+1)) \
-    | while read OLD; do rm -rf "$BACKUP_ROOT/$OLD"*; done
+#find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
+#    | sort -r | awk -F'T' '{print $1}' | uniq -d | tail -n +$(($KEEP_MONTHLY+1)) \
+#    | while read OLD; do rm -rf "$BACKUP_ROOT/$OLD"*; done
+
+# Retention: delete backups older than KEEP_DAYS
+echo "[INFO] Pruning backups older than $KEEP_DAYS days"
+/usr/bin/rclone delete --min-age ${KEEP_DAYS}d "$REMOTE_PATH"
 
 # Email report
 REPORT="[INFO] Backup completed for $HOST at $TIMESTAMP"
