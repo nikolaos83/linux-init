@@ -118,10 +118,9 @@ mkdir -p "$BACKUP_DIR"
 echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
 
 # Directories to backup
-for DIR in /home /root; do
-    if [ -d "$DIR" ]; then
-        rsync -a --no-acls --no-xattrs --delete "$DIR/" "$BACKUP_DIR/$DIR_NAME/"
-    fi
+for DIR in /etc /home /var /root; do
+    DIR_NAME=$(basename "$DIR")
+    rsync -aH --no-acls --no-xattrs --delete "$DIR/" "$BACKUP_DIR/$DIR_NAME/"
 done
 
 # Retention: weekly backups (last 2)
