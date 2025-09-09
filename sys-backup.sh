@@ -14,13 +14,8 @@ BACKUP_SCRIPT="/usr/local/bin/backup-to-gdrive.sh"
 SERVICE_FILE="/etc/systemd/system/rclone@.service"
 TIMER_FILE="/etc/systemd/system/backup-to-gdrive.timer"
 SERVICE_NAME="rclone@host"
-RCLONE_REMOTE="gdrive"
 HOST=$(hostname -s)
-REMOTE_PATH="$RCLONE_REMOTE:/servers/$HOST/backups"
-
-# Email settings
-EMAIL_FROM="${HOSTNAME}-${BACKUPS_EMAIL_FROM}"
-EMAIL_TO="${BACKUPS_EMAIL_TO}"
+REMOTE_PATH="$REMOTE:/servers/$HOST/backups"
 
 ###########################
 # INSTALL DEPENDENCIES
@@ -28,7 +23,7 @@ EMAIL_TO="${BACKUPS_EMAIL_TO}"
 
 apt update
 apt upgrade -y
-apt install -y rclone msmtp-mta mailutils
+apt install -y rclone rsync
 
 mkdir -p "$(dirname "$RCLONE_CONFIG")"
 mkdir -p "$BACKUP_ROOT"
@@ -106,19 +101,14 @@ cat > "$BACKUP_SCRIPT" << 'EOF'
 set -euo pipefail
 
 HOST=$(hostname -s)
+REMOTE="gdrive"
 BACKUP_ROOT="/mnt/gdrive/$HOST/backups"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-#KEEP_WEEKLY=2
-#KEEP_MONTHLY=2
-KEEP_DAYS=14 # Keep backups for 14 days
-RCLONE_REMOTE="gdrive"
-REMOTE_PATH="$RCLONE_REMOTE:/servers/$HOST/backups"
-
-EMAIL_SUBJECT="backups@$HOST"
+KEEP_DAYS=60 # Keep backups for 14 days
+REMOTE_PATH="$REMOTE:/servers/$HOST/backups"
 
 mkdir -p "$BACKUP_DIR"
-
 echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
 
 # Directories to backup
@@ -128,24 +118,9 @@ for DIR in /home /root; do
     /usr/bin/rclone copy "$DIR" "$REMOTE_PATH/$TIMESTAMP/$DIR_NAME/" --log-level=INFO
 done
 
-# Retention: weekly backups (last 2)
-#find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
-#    | sort | head -n -$KEEP_WEEKLY | xargs -r rm -rf
-
-# Retention: monthly backups (keep last 2)
-#find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name '????-??-??T??-??-??Z' \
-#    | sort -r | awk -F'T' '{print $1}' | uniq -d | tail -n +$(($KEEP_MONTHLY+1)) \
-#    | while read OLD; do rm -rf "$BACKUP_ROOT/$OLD"*; done
-
 # Retention: delete backups older than KEEP_DAYS
 echo "[INFO] Pruning backups older than $KEEP_DAYS days"
 /usr/bin/rclone delete --min-age ${KEEP_DAYS}d "$REMOTE_PATH"
-
-# Email report
-EMAIL_FROM="${HOSTNAME}-${BACKUPS_EMAIL_FROM}"
-EMAIL_TO="${BACKUPS_EMAIL_TO}"
-REPORT="[INFO] Backup completed for $HOST at $TIMESTAMP"
-echo -e "$REPORT" | mail -s "$EMAIL_SUBJECT" -r "$EMAIL_FROM" "$EMAIL_TO"
 
 echo "[INFO] Backup finished"
 EOF
