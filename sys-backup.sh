@@ -172,3 +172,12 @@ systemctl enable backup-to-gdrive.timer
 systemctl start backup-to-gdrive.timer
 
 echo "[INFO] Backup system installed and timer enabled"
+
+###########################
+# RUN FIRST BACKUP IMMEDIATELY
+###########################
+
+echo "[INFO] Triggering first backup now..."
+systemctl start backup-to-gdrive.service
+echo "[INFO] First backup triggered. You can monitor progress with:"
+echo "  journalctl -u backup-to-gdrive.service -f"
