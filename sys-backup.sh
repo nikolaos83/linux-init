@@ -118,7 +118,7 @@ mkdir -p "$BACKUP_DIR"
 echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
 
 # Directories to backup
-for DIR in /etc /home /var /root; do
+for DIR in /home /root; do
     if [ -d "$DIR" ]; then
         rsync -aHAX --delete "$DIR" "$BACKUP_DIR"
     fi
