@@ -13,10 +13,19 @@ curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubuserconte
 
 cat > /usr/local/bin/rclone-mount.sh << 'EOF'
 #!/bin/bash
+set -euo pipefail
+
 REMOTE=${1:?remote required}
 INSTANCE=${2:?instance required}
 CONFIG=/root/.config/rclone/rclone.conf
 
+# Check rclone config exists
+if [ ! -f "$CONFIG" ]; then
+    echo "[ERROR] rclone config not found at $CONFIG"
+    exit 1
+fi
+
+# Determine mount point and remote path
 if [ "$INSTANCE" = "common" ]; then
     MOUNT_POINT=/mnt/gdrive/common
     REMOTE_PATH=$REMOTE:/servers/common
@@ -27,6 +36,16 @@ fi
 
 mkdir -p "$MOUNT_POINT"
 
+echo "[INFO] Mounting $REMOTE_PATH → $MOUNT_POINT"
+logger -t rclone "[INFO] Mounting $REMOTE_PATH → $MOUNT_POINT"
+
+# Pre-check remote availability
+if ! /usr/bin/rclone lsd "$REMOTE_PATH" --config="$CONFIG" &>/dev/null; then
+    echo "[WARN] Remote $REMOTE_PATH not accessible"
+    logger -t rclone "[WARN] Remote $REMOTE_PATH not accessible"
+fi
+
+# Mount rclone
 exec /usr/bin/rclone mount \
     "$REMOTE_PATH" "$MOUNT_POINT" \
     --config="$CONFIG" \
@@ -49,13 +68,19 @@ Description=Rclone Mount (%i)
 Documentation=https://rclone.org/docs/
 After=network-online.target
 Wants=network-online.target
+Requires=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/rclone-mount.sh gdrive %i
-ExecStop=/bin/bash -c '$(which fusermount) -uz /mnt/%i'
+ExecStop=/bin/bash -c '$(which fusermount) -uz /mnt/%i || echo "[WARN] Unmount failed for /mnt/%i"'
 Restart=on-failure
 RestartSec=10
+TimeoutSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=60
+# Optional: notify systemd that the service is ready
+# NotifyAccess=all
 
 [Install]
 WantedBy=multi-user.target
@@ -66,3 +91,5 @@ systemctl enable rclone@host
 systemctl enable rclone@common
 systemctl start rclone@host
 systemctl start rclone@common
+journalctl -u rclone@host -f
+journalctl -u rclone@common -f
