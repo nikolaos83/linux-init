@@ -6,8 +6,6 @@ apt install rclone -y
 
 mkdir -p /root/.config/rclone/
 mkdir -p /root/.cache/rclone
-mkdir -p /mnt/gdrive/common
-mkdir -p /mnt/gdrive/${HOSTNAME}
 
 curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubusercontent.com/nikolaos83/secrets/refs/heads/main/rclone.conf -o /root/.config/rclone/rclone.conf || echo "Failed to fetch rclone.conf"
 
@@ -26,13 +24,15 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # Determine mount point and remote path
-# Determine mount point and remote path
 if [ "$INSTANCE" = "backups" ]; then
     MOUNT_POINT=/mnt/backups
     REMOTE_PATH=$REMOTE:/backups
 elif [ "$INSTANCE" = "hosts" ]; then
     MOUNT_POINT=/mnt/hosts/
     REMOTE_PATH=$REMOTE:/hosts/
+elif [ "$INSTANCE" = "netdata" ]; then
+    MOUNT_POINT=/mnt/netdata/
+    REMOTE_PATH=$REMOTE:/netdata/
 fi
 
 mkdir -p "$MOUNT_POINT"
@@ -89,9 +89,13 @@ systemctl daemon-reload
 
 systemctl start rclone@backups
 systemctl start rclone@hosts
+systemctl start rclone@netdata
+
 
 systemctl enable rclone@backups
 systemctl enable rclone@hosts
+systemctl enable rclone@netdata
 
 journalctl -u rclone@backups -f
 journalctl -u rclone@hosts -f
+journalctl -u rclone@netdata -f
