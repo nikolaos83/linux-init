@@ -6,163 +6,143 @@ set -euo pipefail
 ###########################
 
 REMOTE="gdrive"
-MOUNT_POINT="/mnt/gdrive/$(hostname -s)"
-BACKUP_ROOT="$MOUNT_POINT/backups"
+HOST=$(hostname -s)
+REMOTE_PATH="$REMOTE:/servers/$HOST/backups"
 RCLONE_CONFIG="/root/.config/rclone/rclone.conf"
-RCLONE_SCRIPT="/usr/local/bin/rclone-mount.sh"
-BACKUP_SCRIPT="/usr/local/bin/backup-to-gdrive.sh"
-SERVICE_FILE="/etc/systemd/system/rclone@.service"
-TIMER_FILE="/etc/systemd/system/backup-to-gdrive.timer"
-SERVICE_NAME="rclone@host"
-HOST=$(hostname -s)
-REMOTE_PATH="$REMOTE:/servers/$HOST/backups"
+BACKUP_SCRIPT="/usr/local/bin/sys-backup.sh"
+TIMER_FILE="/etc/systemd/system/sys-backup.timer"
+LOG_FILE="/var/log/sys-backup.log"
+KEEP_DAYS=60 # Keep backups for 60 days
+
+# Directories to be backed up
+BACKUP_DIRS=("/home" "/root" "/etc")
 
 ###########################
-# INSTALL DEPENDENCIES
+# FUNCTIONS
 ###########################
 
-apt update
-apt upgrade -y
-apt install -y rclone rsync
+log() {
+    echo "[$ (date -u +"%Y-%m-%dT%H-%M-%SZ")] $1" | tee -a "$LOG_FILE"
+}
 
-mkdir -p "$(dirname "$RCLONE_CONFIG")"
-mkdir -p "$BACKUP_ROOT"
+install_dependencies() {
+    log "[INFO] Updating package lists..."
+    apt-get update -y
+    log "[INFO] Installing dependencies (rclone)..."
+    apt-get install -y rclone
+}
 
-# Fetch rclone config
-if ! curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubusercontent.com/nikolaos83/secrets/refs/heads/main/rclone.conf -o "$RCLONE_CONFIG"; then
-    echo "[WARN] Failed to fetch rclone.conf"
-fi
+configure_rclone() {
+    log "[INFO] Configuring rclone..."
+    mkdir -p "$(dirname "$RCLONE_CONFIG")"
+    # Fetch rclone config from a secure location (e.g., GitHub secrets)
+    if ! curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubusercontent.com/nikolaos83/secrets/refs/heads/main/rclone.conf -o "$RCLONE_CONFIG"; then
+        log "[ERROR] Failed to fetch rclone.conf. Please configure it manually at $RCLONE_CONFIG."
+        exit 1
+    fi
+    log "[INFO] rclone configured successfully."
+}
 
 ###########################
-# RCLONE WRAPPER
+# MAIN BACKUP SCRIPT LOGIC
 ###########################
 
-cat > "$RCLONE_SCRIPT" << 'EOF'
+# This section will be written into the actual backup script that the timer runs
+create_backup_script() {
+    cat > "$BACKUP_SCRIPT" << EOL
 #!/bin/bash
 set -euo pipefail
 
-REMOTE=${1:?remote required}
-INSTANCE=${2:?instance required}
-CONFIG=/root/.config/rclone/rclone.conf
-MOUNT_POINT=/mnt/gdrive/$(hostname -s)
+# Configuration is inherited from the installer script's variables
+REMOTE="$REMOTE"
+HOST="$HOST"
+REMOTE_PATH="$REMOTE_PATH"
+LOG_FILE="$LOG_FILE"
+KEEP_DAYS=$KEEP_DAYS
+BACKUP_DIRS=(${BACKUP_DIRS[@]})
 
-mkdir -p "$MOUNT_POINT"
+log() {
+    echo "[\$(date -u +"%Y-%m-%dT%H-%M-%SZ")] \$1" | tee -a "\$LOG_FILE"
+}
 
-exec /usr/bin/rclone mount \
-    "$REMOTE:/servers/$(hostname -s)" "$MOUNT_POINT" \
-    --config="$CONFIG" \
-    --allow-other \
-    --dir-cache-time=72h \
-    --poll-interval=15s \
-    --log-file=/var/log/rclone-$INSTANCE.log \
-    --umask=002 \
-    --log-level=INFO \
-    --read-only
-EOF
+log "[INFO] Starting system backup for \$HOST..."
 
-chmod +x "$RCLONE_SCRIPT"
+# Create a temporary directory for the backup
+TMP_DIR=\$(mktemp -d)
+trap 'rm -rf "\$TMP_DIR"' EXIT
+
+TIMESTAMP=\$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+ARCHIVE_NAME="sys-backup-\$TIMESTAMP.tar.gz"
+ARCHIVE_PATH="\$TMP_DIR/\$ARCHIVE_NAME"
+
+log "[INFO] Creating archive: \$ARCHIVE_NAME"
+tar -czf "\$ARCHIVE_PATH" \
+    --exclude='*.log' \
+    --exclude='*.cache' \
+    --exclude='*/tmp/*' \
+    --exclude='*/node_modules/*' \
+    \${BACKUP_DIRS[@]}
+
+log "[INFO] Uploading archive to \$REMOTE_PATH..."
+/usr/bin/rclone copy "\$ARCHIVE_PATH" "\$REMOTE_PATH/" --config="$RCLONE_CONFIG" --log-level=INFO
+
+log "[INFO] Backup uploaded successfully."
+
+log "[INFO] Pruning backups older than \$KEEP_DAYS days..."
+/usr/bin/rclone delete "\$REMOTE_PATH/" --config="$RCLONE_CONFIG" --min-age \${KEEP_DAYS}d --log-level=INFO
+
+log "[INFO] Backup and pruning finished."
+EOL
+
+    chmod +x "$BACKUP_SCRIPT"
+}
 
 ###########################
-# SYSTEMD UNIT FOR RCLONE
+# SYSTEMD TIMER SETUP
 ###########################
 
-cat > "$SERVICE_FILE" << EOF
+setup_systemd_timer() {
+    log "[INFO] Setting up systemd timer..."
+
+    cat > /etc/systemd/system/sys-backup.service << EOF
 [Unit]
-Description=Rclone Mount (%i)
-Documentation=https://rclone.org/docs/
+Description=Run System Backup to GDrive
 After=network-online.target
-Wants=network-online.target
-Requires=network-online.target
-
-[Service]
-Type=simple
-ExecStart=$RCLONE_SCRIPT $REMOTE %i
-ExecStop=/bin/bash -c '$(which fusermount) -uz /mnt/%i || echo "[WARN] Unmount failed for /mnt/%i"'
-Restart=on-failure
-RestartSec=10
-TimeoutSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=60
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-systemctl start "$SERVICE_NAME"
-
-###########################
-# BACKUP SCRIPT
-###########################
-
-cat > "$BACKUP_SCRIPT" << 'EOF'
-#!/bin/bash
-set -euo pipefail
-
-HOST=$(hostname -s)
-REMOTE="gdrive"
-BACKUP_ROOT="/mnt/gdrive/$HOST/backups"
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
-BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-KEEP_DAYS=60 # Keep backups for 14 days
-REMOTE_PATH="$REMOTE:/servers/$HOST/backups"
-
-mkdir -p "$BACKUP_DIR"
-echo "[INFO] Starting backup for $HOST at $TIMESTAMP"
-
-# Directories to backup
-for DIR in /home /root; do
-    DIR_NAME=$(basename "$DIR")
-    echo "[INFO] Backing up $DIR to $REMOTE_PATH/$TIMESTAMP/$DIR_NAME/"
-    /usr/bin/rclone copy "$DIR" "$REMOTE_PATH/$TIMESTAMP/$DIR_NAME/" --log-level=INFO
-done
-
-# Retention: delete backups older than KEEP_DAYS
-echo "[INFO] Pruning backups older than $KEEP_DAYS days"
-/usr/bin/rclone delete --min-age ${KEEP_DAYS}d "$REMOTE_PATH"
-
-echo "[INFO] Backup finished"
-EOF
-
-chmod +x "$BACKUP_SCRIPT"
-
-###########################
-# SYSTEMD TIMER
-###########################
-
-cat > "$TIMER_FILE" << EOF
-[Unit]
-Description=Weekly Backup to GDrive
-
-[Timer]
-OnCalendar=weekly
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-cat > /etc/systemd/system/backup-to-gdrive.service << EOF
-[Unit]
-Description=Run Backup to GDrive
 
 [Service]
 Type=oneshot
 ExecStart=$BACKUP_SCRIPT
 EOF
 
-systemctl daemon-reload
-systemctl enable backup-to-gdrive.timer
-systemctl start backup-to-gdrive.timer
+    cat > "$TIMER_FILE" << EOF
+[Unit]
+Description=Daily System Backup to GDrive
 
-echo "[INFO] Backup system installed and timer enabled"
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable sys-backup.timer
+    systemctl start sys-backup.timer
+    log "[INFO] Systemd timer enabled. Backup will run daily."
+}
 
 ###########################
-# RUN FIRST BACKUP IMMEDIATELY
+# SCRIPT EXECUTION
 ###########################
 
-echo "[INFO] Triggering first backup now..."
-systemctl start backup-to-gdrive.service
-echo "[INFO] First backup triggered. You can monitor progress with:"
-echo "  journalctl -u backup-to-gdrive.service -f"
+install_dependencies
+configure_rclone
+create_backup_script
+setup_systemd_timer
+
+log "[INFO] System backup script installed successfully."
+log "[INFO] Triggering first backup now..."
+systemctl start sys-backup.service
+log "[INFO] First backup triggered. Monitor with: journalctl -u sys-backup.service -f"
