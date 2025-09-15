@@ -26,12 +26,13 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # Determine mount point and remote path
-if [ "$INSTANCE" = "common" ]; then
-    MOUNT_POINT=/mnt/gdrive/common
-    REMOTE_PATH=$REMOTE:/servers/common
-else
-    MOUNT_POINT=/mnt/gdrive/$(hostname -s)
-    REMOTE_PATH=$REMOTE:/servers/$(hostname -s)
+# Determine mount point and remote path
+if [ "$INSTANCE" = "backups" ]; then
+    MOUNT_POINT=/mnt/backups
+    REMOTE_PATH=$REMOTE:/backups
+elif [ "$INSTANCE" = "hosts" ]; then
+    MOUNT_POINT=/mnt/hosts/
+    REMOTE_PATH=$REMOTE:/hosts/
 fi
 
 mkdir -p "$MOUNT_POINT"
@@ -85,9 +86,12 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable rclone@host
-systemctl enable rclone@common
-systemctl start rclone@host
-systemctl start rclone@common
-journalctl -u rclone@host -f
-journalctl -u rclone@common -f
+
+systemctl start rclone@backups
+systemctl start rclone@hosts
+
+systemctl enable rclone@backups
+systemctl enable rclone@hosts
+
+journalctl -u rclone@backups -f
+journalctl -u rclone@hosts -f
