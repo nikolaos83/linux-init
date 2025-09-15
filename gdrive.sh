@@ -1,15 +1,7 @@
-RCLONE_SERVICE_FILE="/etc/systemd/system/rclone@.service"
+#!/bin/bash
 
-apt update
-apt upgrade -y
-apt install rclone -y
-
-mkdir -p /root/.config/rclone/
-mkdir -p /root/.cache/rclone
-
-curl -H "Authorization: token ${GITHUB_TOKEN}" -fsSL https://raw.githubusercontent.com/nikolaos83/secrets/refs/heads/main/rclone.conf -o /root/.config/rclone/rclone.conf || echo "Failed to fetch rclone.conf"
-
-cat > /usr/local/bin/rclone-mount.sh << 'EOF'
+# Create the rclone mount script
+cat << 'EOF' > /usr/local/bin/rclone-mount.sh
 #!/bin/bash
 set -euo pipefail
 
@@ -28,10 +20,10 @@ if [ "$INSTANCE" = "backups" ]; then
     MOUNT_POINT=/mnt/backups
     REMOTE_PATH=$REMOTE:/backups
 elif [ "$INSTANCE" = "hosts" ]; then
-    MOUNT_POINT=/mnt/hosts/
+    MOUNT_POINT=/mnt/hosts
     REMOTE_PATH=$REMOTE:/hosts/
 elif [ "$INSTANCE" = "netdata" ]; then
-    MOUNT_POINT=/mnt/netdata/
+    MOUNT_POINT=/mnt/netdata
     REMOTE_PATH=$REMOTE:/netdata/
 fi
 
@@ -56,46 +48,44 @@ exec /usr/bin/rclone mount \
     --log-file=/var/log/rclone-$INSTANCE.log \
     --umask=002 \
     --log-level=INFO \
-    --read-only
+    --buffer-size=256M \
+    --vfs-cache-mode=writes \
+    --vfs-read-chunk-size=128M \
+    --vfs-read-chunk-size-limit=2G
 EOF
 
-chmod +x /usr/local/bin/rclone-mount.sh
-
-cat > "$RCLONE_SERVICE_FILE" << 'EOF'
+# Create the systemd service file
+cat << 'EOF' > /etc/systemd/system/rclone@.service
 [Unit]
 Description=Rclone Mount (%i)
 Documentation=https://rclone.org/docs/
 After=network-online.target
 Wants=network-online.target
-Requires=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/rclone-mount.sh gdrive %i
-ExecStop=/bin/bash -c '$(which fusermount) -uz /mnt/%i || echo "[WARN] Unmount failed for /mnt/%i"'
+ExecStop=/bin/bash -c '/usr/bin/fusermount -uz /mnt/%i || echo "[WARN] Unmount failed for /mnt/%i"'
 Restart=on-failure
-RestartSec=10
+RestartSec=5
 TimeoutSec=60
 StartLimitBurst=3
-#StartLimitIntervalSec=60
-# Optional: notify systemd that the service is ready
-# NotifyAccess=all
+StartLimitIntervalSec=60
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+# Make the mount script executable
+chmod +x /usr/local/bin/rclone-mount.sh
+
+# Reload the systemd daemon
 systemctl daemon-reload
 
-systemctl start rclone@backups
-systemctl start rclone@hosts
-systemctl start rclone@netdata
-
-
-systemctl enable rclone@backups
-systemctl enable rclone@hosts
-systemctl enable rclone@netdata
-
-journalctl -u rclone@backups -f
-journalctl -u rclone@hosts -f
-journalctl -u rclone@netdata -f
+# Enable and start the rclone services
+systemctl enable rclone@backups.service
+systemctl enable rclone@hosts.service
+systemctl enable rclone@netdata.service
+systemctl start rclone@backups.service
+systemctl start rclone@hosts.service
+systemctl start rclone@netdata.service
