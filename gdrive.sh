@@ -43,13 +43,15 @@ exec /usr/bin/rclone mount \
     "$REMOTE_PATH" "$MOUNT_POINT" \
     --config="$CONFIG" \
     --allow-other \
-    --dir-cache-time=72h \
-    --poll-interval=15s \
+    --dir-cache-time=240h \
+    --poll-interval=1m \
     --log-file=/var/log/rclone-$INSTANCE.log \
     --umask=002 \
     --log-level=INFO \
     --buffer-size=256M \
-    --vfs-cache-mode=writes \
+    --vfs-cache-mode=full \
+    --vfs-cache-max-size=4G \
+    --vfs-cache-max-age=240h \
     --vfs-read-chunk-size=128M \
     --vfs-read-chunk-size-limit=2G
 EOF
