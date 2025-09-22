@@ -38,7 +38,14 @@ STRICT_SELINUX=true
 
 # --- Helper Functions ---
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+    local msg="$1"
+    local color="$2"
+    local ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    if [ -n "$color" ]; then
+        echo -e "${ts} - ${color}${msg}${RESET}" | tee -a "$LOG_FILE"
+    else
+        echo "${ts} - $msg" | tee -a "$LOG_FILE"
+    fi
 }
 
 usage() {
@@ -50,7 +57,7 @@ selinux_status() {
     if command -v getenforce >/dev/null; then
         local mode=$(getenforce)
         log "SELinux mode: $mode"
-        [ "$mode" = "Enforcing" ] && log "⚠️ SELinux is enforcing — policy denials may block updates."
+        [ "$mode" = "Enforcing" ] && log "⚠️ SELinux is enforcing — policy denials may block updates." "$YELLOW"
     fi
 }
 
@@ -92,7 +99,7 @@ update_local_fw() {
     firewall-cmd --permanent --ipset=$ipset_name --add-entry=$prefix
 
     if ! firewall-cmd --reload; then
-        log "❌ firewalld reload failed (possible SELinux denial)"
+        log "❌ firewalld reload failed (possible SELinux denial)" "$RED"
         check_avc
         $STRICT_SELINUX && exit 1
     fi
@@ -198,7 +205,7 @@ if [ "$CURRENT_PREFIX" != "$EXISTING_PREFIX" ]; then
     log "Updating OCI rule..."
     NEW_RULES_JSON=$(echo "$RULES_JSON" | jq "(.[] | select(.description==\"$RULE_DESCRIPTION\").source) |= \"$CURRENT_PREFIX\" ")
     if oci network security-list update --security-list-id "$SEC_LIST_OCID" --ingress-security-rules "$NEW_RULES_JSON" --force; then
-        log "✅ OCI updated to $CURRENT_PREFIX"
+        log "✅ OCI updated to $CURRENT_PREFIX" "$GREEN"
     else
         log "❌ Failed to update OCI"
         check_avc
