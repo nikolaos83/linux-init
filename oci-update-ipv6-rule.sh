@@ -17,142 +17,493 @@
 #   - Colorful, verbose logging
 #
 # Usage:
-#   oci-update-ipv6-rule.sh            Run once
-#   oci-update-ipv6-rule.sh --install  Install service+timer
-#   oci-update-ipv6-rule.sh --uninstall Remove service+timer
-#   oci-update-ipv6-rule.sh --dry-run  Preview changes
-#   oci-update-ipv6-rule.sh -h|--help  Show help
-#
+#   oci-update-ipv6-rule.sh [--dry-run]
+#   oci-update-ipv6-rule.sh --install [--non-interactive]
+#   oci-update-ipv6-rule.sh --uninstall
+#   oci-update-ipv6-rule.sh --health-check
+#   oci-update-ipv6-rule.sh --auto            # invoked by systemd
+#   oci-update-ipv6-rule.sh -h|--help         # Show help
 
-# --- Default Configuration ---
-SEC_LIST_OCID="$Oracle_VCN_Security_List_OCID"
-RULE_DESCRIPTION="ALLOW_HOME_NETWORK@NET28"
-SSH_USER_HOST="root@msm"
-EXTRA_HOSTS=("m1" "m2")
-TIMER_INTERVAL="5min"
+set -euo pipefail
+
+# ----------------------------- Configuration -----------------------------
 LOG_FILE="/var/log/oci_ipv6_update.log"
-STRICT_SELINUX=true
-INSTALL_PATH="/usr/local/bin/oci-update-ipv6-rule.sh"
-# --- End Configuration ---
+CONFIG_FILE="/etc/oci-update-ipv6-rule.conf"
+INSTALL_PATH="/usr/local/bin/oci-update-ipv6-rule"
+SERVICE_FILE="/etc/systemd/system/oci-update-ipv6-rule.service"
+TIMER_FILE="/etc/systemd/system/oci-update-ipv6-rule.timer"
+DEFAULT_TIMER_INTERVAL="5min"
+DEFAULT_IPSET_NAME="home6"
+DEFAULT_RULE_DESCRIPTION="ALLOW_HOME_NETWORK@NET28"
+DEFAULT_ROUTER_COMMAND="rdisc6 -1 wlan0"
+DEFAULT_ROUTER_SSH="root@msm"
+DEFAULT_EXTRA_HOSTS=("m1" "m2")
+STRICT_SELINUX_DEFAULT=true
+DEFAULT_SEC_LIST_OCID="${Oracle_VCN_Security_List_OCID:-}"
 
-# --- Colors ---
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[0;33m"
-BLUE="\033[0;34m"
-RESET="\033[0m"
+# ----------------------------- Color Helpers -----------------------------
+FORCE_COLOR=${FORCE_COLOR:-0}
+if [[ -t 1 ]] || [[ "$FORCE_COLOR" == "1" ]]; then
+    COLORIZE=1
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    MAGENTA='\033[0;35m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    COLORIZE=0
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    MAGENTA=''
+    CYAN=''
+    BOLD=''
+    RESET=''
+fi
+
+highlight() {
+    local text="$1"
+    local color="${2:-$YELLOW}"
+    if (( COLORIZE )); then
+        printf '%b%s%b' "$color" "$text" "$RESET"
+    else
+        printf '%s' "$text"
+    fi
+}
 
 log() {
-    local msg="$1"
+    local level="$1"
     local color="$2"
-    local ts="$(date '+%Y-%m-%d %H:%M:%S')"
-    if [ -n "$color" ]; then
-        echo -e "${ts} - ${color}${msg}${RESET}" | tee -a "$LOG_FILE"
+    shift 2
+    local message="$*"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local plain="${timestamp} [${level}] ${message}"
+    if (( COLORIZE )); then
+        printf '%s %b[%s]%b %s\n' "$timestamp" "$color" "$level" "$RESET" "$message"
     else
-        echo "${ts} - $msg" | tee -a "$LOG_FILE"
+        printf '%s\n' "$plain"
+    fi
+    printf '%s\n' "$plain" >> "$LOG_FILE"
+}
+
+log_info() { log INFO "$BLUE" "$@"; }
+log_success() { log OK "$GREEN" "$@"; }
+log_warn() { log WARN "$YELLOW" "$@"; }
+log_error() { log ERROR "$RED" "$@"; }
+
+fail() {
+    log_error "$@"
+    exit 1
+}
+
+ensure_log_file() {
+    local log_dir
+    log_dir=$(dirname "$LOG_FILE")
+    mkdir -p "$log_dir"
+    touch "$LOG_FILE"
+    chmod 600 "$LOG_FILE"
+}
+
+show_usage() {
+    cat <<USAGE
+$(basename "$0") - OCI IPv6 prefix synchronisation utility
+
+Usage:
+  $(basename "$0") [--dry-run]
+  $(basename "$0") --install [--non-interactive]
+  $(basename "$0") --uninstall
+  $(basename "$0") --health-check
+  $(basename "$0") --auto
+  $(basename "$0") --help
+
+Options:
+  --dry-run          Perform all checks without modifying anything.
+  --install          Install the systemd service and timer (prompts for config unless --non-interactive is supplied).
+  --non-interactive  Use existing configuration without prompting during --install.
+  --uninstall        Remove the systemd service, timer, and installed script.
+  --health-check     Run dependency/service/SELinux checks without applying changes.
+  --auto             Run a non-interactive update (intended for systemd).
+  -h, --help         Display this help message.
+USAGE
+}
+
+# ----------------------------- Config helpers ----------------------------
+set_defaults() {
+    SEC_LIST_OCID="$DEFAULT_SEC_LIST_OCID"
+    RULE_DESCRIPTION="$DEFAULT_RULE_DESCRIPTION"
+    ROUTER_SSH="$DEFAULT_ROUTER_SSH"
+    ROUTER_COMMAND="$DEFAULT_ROUTER_COMMAND"
+    EXTRA_HOSTS=("${DEFAULT_EXTRA_HOSTS[@]}")
+    TIMER_INTERVAL="$DEFAULT_TIMER_INTERVAL"
+    IPSET_NAME="$DEFAULT_IPSET_NAME"
+    STRICT_SELINUX=$STRICT_SELINUX_DEFAULT
+}
+
+load_config() {
+    set_defaults
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
     fi
 }
 
-usage() {
-    echo -e "${BLUE}============================================${RESET}"
-    echo -e "${BLUE}   OCI IPv6 Updater & Firewall Sync Tool   ${RESET}"
-    echo -e "${BLUE}============================================${RESET}"
-    echo
-    echo -e "${GREEN}Usage:${RESET}"
-    echo "  $0 [--install|--uninstall|--dry-run|--help]"
-    echo
-    echo -e "${GREEN}Options:${RESET}"
-    echo "  --install     Install as systemd service+timer"
-    echo "  --uninstall   Remove systemd service+timer"
-    echo "  --dry-run     Show what would happen, but do nothing"
-    echo "  -h, --help    Show this help message"
-    echo
-    echo -e "${GREEN}Defaults:${RESET}"
-    echo "  OCI SecList OCID: $SEC_LIST_OCID"
-    echo "  Rule description: $RULE_DESCRIPTION"
-    echo "  SSH router host : $SSH_USER_HOST"
-    echo "  Extra hosts     : ${EXTRA_HOSTS[*]}"
-    echo "  Timer interval  : $TIMER_INTERVAL"
-    echo "  Install path    : $INSTALL_PATH"
-    echo
-    exit 0
-}
-
-selinux_status() {
-    if command -v getenforce >/dev/null; then
-        local mode=$(getenforce)
-        log "SELinux mode: $mode" "$BLUE"
-        [ "$mode" = "Enforcing" ] && log "⚠ SELinux is enforcing" "$YELLOW"
-    fi
-}
-
-fix_selinux_contexts() {
-    if command -v restorecon >/dev/null; then
-        restorecon -v /etc/systemd/system/oci-update-ipv6-rule.{service,timer} "$INSTALL_PATH" 2>&1 | tee -a "$LOG_FILE"
-    fi
-}
-
-check_avc() {
-    if [ -f /var/log/audit/audit.log ]; then
-        local denials
-        denials=$(tail -n 50 /var/log/audit/audit.log | grep AVC | tail -n 5)
-        [ -n "$denials" ] && log "Recent SELinux denials:\n$denials" "$YELLOW"
-    fi
-}
-
-get_prefix_ssh() {
-    log "Querying IPv6 prefix via $SSH_USER_HOST..." "$BLUE"
-    CURRENT_PREFIX=$(ssh "$SSH_USER_HOST" "rdisc6 -1 wlan0" | awk '/Prefix/ {print $3; exit}')
-}
-
-update_local_fw() {
-    local prefix=$1
-    local ipset_name="home6"
-    log "Updating local firewall with prefix: ${YELLOW}$prefix${RESET}"
-
-    firewall-cmd --permanent --get-ipsets | grep -q "^$ipset_name$" || \
-        firewall-cmd --permanent --new-ipset=$ipset_name --type=hash:net --family=ipv6
-
-    firewall-cmd --permanent --zone=public --query-rich-rule="rule family=ipv6 source ipset=$ipset_name accept" >/dev/null 2>&1 || \
-        firewall-cmd --permanent --zone=public --add-rich-rule="rule family=ipv6 source ipset=$ipset_name accept"
-
-    for entry in $(firewall-cmd --ipset=$ipset_name --get-entries); do
-        firewall-cmd --permanent --ipset=$ipset_name --remove-entry=$entry
-    done
-
-    firewall-cmd --permanent --ipset=$ipset_name --add-entry=$prefix
-
-    if ! firewall-cmd --reload; then
-        log "firewalld reload failed (possible SELinux denial)" "$RED"
-        check_avc
-        $STRICT_SELINUX && exit 1
-    fi
-}
-
-update_remote_fw() {
-    local prefix=$1
+save_config() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    cat > "$CONFIG_FILE" <<EOF
+# Autogenerated by oci-update-ipv6-rule.sh on $(date)
+SEC_LIST_OCID="$SEC_LIST_OCID"
+RULE_DESCRIPTION="$RULE_DESCRIPTION"
+ROUTER_SSH="$ROUTER_SSH"
+ROUTER_COMMAND="$ROUTER_COMMAND"
+EXTRA_HOSTS=(
+EOF
     for host in "${EXTRA_HOSTS[@]}"; do
-        log "Updating firewall on ${YELLOW}$host${RESET} with prefix ${YELLOW}$prefix${RESET}"
-        ssh "root@$host" "$(typeset -f update_local_fw); update_local_fw $prefix"
+        printf '    "%s"\n' "$host" >> "$CONFIG_FILE"
+    done
+    cat >> "$CONFIG_FILE" <<EOF
+)
+TIMER_INTERVAL="$TIMER_INTERVAL"
+IPSET_NAME="$IPSET_NAME"
+STRICT_SELINUX=$STRICT_SELINUX
+EOF
+    chmod 600 "$CONFIG_FILE"
+    log_success "Saved configuration to $(highlight "$CONFIG_FILE" "$MAGENTA")"
+}
+
+ask() {
+    local prompt="$1"
+    local default="$2"
+    local result=""
+    if [[ -t 0 ]]; then
+        read -r -p "$prompt [$default]: " result
+    fi
+    if [[ -z "$result" ]]; then
+        result="$default"
+    fi
+    printf '%s' "$result"
+}
+
+collect_configuration() {
+    local non_interactive="$1"
+    if [[ "$non_interactive" == "1" ]]; then
+        log_info "Using existing configuration (non-interactive mode)."
+        return
+    fi
+
+    log_info "Starting interactive configuration. Press enter to accept defaults."
+    SEC_LIST_OCID="$(ask "OCI Security List OCID" "$SEC_LIST_OCID")"
+    RULE_DESCRIPTION="$(ask "Rule description" "$RULE_DESCRIPTION")"
+    ROUTER_SSH="$(ask "Router SSH target" "$ROUTER_SSH")"
+    ROUTER_COMMAND="$(ask "Router command" "$ROUTER_COMMAND")"
+    local hosts_input
+    hosts_input="$(ask "Extra hosts to update (space separated)" "${EXTRA_HOSTS[*]}")"
+    read -r -a EXTRA_HOSTS <<< "$hosts_input"
+    TIMER_INTERVAL="$(ask "Timer interval" "$TIMER_INTERVAL")"
+    IPSET_NAME="$(ask "firewalld IPv6 ipset" "$IPSET_NAME")"
+    local selinux_answer
+    selinux_answer="$(ask "Stop on SELinux denials? (true/false)" "$STRICT_SELINUX")"
+    STRICT_SELINUX="$selinux_answer"
+}
+
+# ----------------------------- Health checks -----------------------------
+check_dependencies() {
+    local missing=()
+    local dep
+    for dep in oci jq ssh firewall-cmd systemctl; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            missing+=("$dep")
+        fi
+    done
+    if (( ${#missing[@]} > 0 )); then
+        fail "Missing required commands: $(highlight "${missing[*]}" "$RED")"
+    fi
+}
+
+SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=10)
+
+check_router_connectivity() {
+    if [[ -z "$ROUTER_SSH" ]]; then
+        log_warn "Router SSH target not configured. Skipping router connectivity check."
+        return 1
+    fi
+    if ssh "${SSH_OPTIONS[@]}" "$ROUTER_SSH" "true" >/dev/null 2>&1; then
+        log_success "SSH connectivity to router $(highlight "$ROUTER_SSH" "$CYAN") verified."
+        return 0
+    else
+        log_warn "Unable to reach router $(highlight "$ROUTER_SSH" "$CYAN"). Ensure host key and connectivity are configured."
+        return 1
+    fi
+}
+
+ensure_selinux_contexts() {
+    if ! command -v getenforce >/dev/null 2>&1; then
+        return
+    fi
+    local mode
+    mode=$(getenforce)
+    log_info "SELinux mode: $(highlight "$mode" "$MAGENTA")"
+    if [[ "$mode" != "Enforcing" && "$mode" != "Permissive" ]]; then
+        return
+    fi
+    local managed_paths=()
+    [[ -f "$SERVICE_FILE" ]] && managed_paths+=("$SERVICE_FILE")
+    [[ -f "$TIMER_FILE" ]] && managed_paths+=("$TIMER_FILE")
+    [[ -f "$INSTALL_PATH" ]] && managed_paths+=("$INSTALL_PATH")
+    [[ -f "$CONFIG_FILE" ]] && managed_paths+=("$CONFIG_FILE")
+    [[ -f "$LOG_FILE" ]] && managed_paths+=("$LOG_FILE")
+    if (( ${#managed_paths[@]} == 0 )); then
+        return
+    fi
+    if command -v semanage >/dev/null 2>&1; then
+        local path
+        local type
+        for path in "${managed_paths[@]}"; do
+            case "$path" in
+                "$SERVICE_FILE"|"$TIMER_FILE") type=systemd_unit_file_t ;;
+                "$INSTALL_PATH") type=bin_t ;;
+                "$CONFIG_FILE") type=etc_t ;;
+                "$LOG_FILE") type=var_log_t ;;
+                *) type=var_t ;;
+            esac
+            semanage fcontext -a -t "$type" "$path" 2>/dev/null || \
+                semanage fcontext -m -t "$type" "$path" 2>/dev/null || true
+        done
+    fi
+    restorecon -Rv "${managed_paths[@]}" >/dev/null 2>&1 || true
+}
+
+check_selinux_denials() {
+    if [[ ! -f /var/log/audit/audit.log ]]; then
+        return
+    fi
+    local denials
+    denials=$(grep -m 5 -E 'AVC|avc' /var/log/audit/audit.log | tail -n 5 || true)
+    if [[ -n "$denials" ]]; then
+        log_warn "Recent SELinux denials detected. Review with: $(highlight "ausearch -m avc -ts recent" "$CYAN")"
+    fi
+}
+
+check_systemd_unit() {
+    local unit="$1"
+    if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        log_warn "Systemd unit $(highlight "$unit" "$CYAN") is not installed."
+        return 1
+    fi
+    if systemctl is-active --quiet "$unit"; then
+        log_success "$(highlight "$unit" "$CYAN") is active."
+    else
+        log_warn "$(highlight "$unit" "$CYAN") is not active. View logs with: $(highlight "journalctl -u $unit" "$CYAN")"
+    fi
+    if systemctl is-enabled --quiet "$unit"; then
+        log_success "$(highlight "$unit" "$CYAN") is enabled on boot."
+    else
+        log_warn "$(highlight "$unit" "$CYAN") is not enabled on boot. Enable with: $(highlight "systemctl enable $unit" "$CYAN")"
+    fi
+}
+
+health_check() {
+    ensure_log_file
+    load_config
+    check_dependencies
+    check_router_connectivity || true
+    ensure_selinux_contexts
+    check_selinux_denials
+    check_systemd_unit "$(basename "$SERVICE_FILE")" || true
+    check_systemd_unit "$(basename "$TIMER_FILE")" || true
+    if systemctl list-units --type=service firewalld.service >/dev/null 2>&1; then
+        if systemctl is-active --quiet firewalld.service; then
+            log_success "firewalld service is running."
+        else
+            log_warn "firewalld service is installed but not active. Start with: $(highlight "systemctl start firewalld" "$CYAN")"
+        fi
+    else
+        log_warn "firewalld service not found; firewall updates will fail."
+    fi
+}
+
+# ----------------------------- Core logic -----------------------------
+fetch_prefix() {
+    local output
+    if [[ -z "$ROUTER_SSH" ]]; then
+        fail "Router SSH target not configured."
+    fi
+    log_info "Querying IPv6 prefix via $(highlight "$ROUTER_SSH" "$CYAN")"
+    if ! output=$(ssh "${SSH_OPTIONS[@]}" "$ROUTER_SSH" "$ROUTER_COMMAND" 2>&1); then
+        log_error "Failed to execute router command: $(highlight "$ROUTER_COMMAND" "$CYAN")"
+        printf '%s\n' "$output"
+        fail "Unable to determine IPv6 prefix from router."
+    fi
+    local prefix
+    prefix=$(awk '/Prefix/ {print $3; exit}' <<<"$output")
+    if [[ -z "$prefix" ]]; then
+        prefix=$(grep -oE '([0-9a-fA-F:]+)/[0-9]+' <<<"$output" | head -n1)
+    fi
+    if [[ -z "$prefix" ]]; then
+        log_error "Router output did not contain a prefix."
+        printf '%s\n' "$output"
+        fail "Unable to parse IPv6 prefix."
+    fi
+    if [[ "$prefix" != */64 ]]; then
+        fail "Expected a /64 prefix but received $(highlight "$prefix" "$MAGENTA")"
+    fi
+    log_success "Discovered prefix $(highlight "$prefix" "$MAGENTA")"
+    CURRENT_PREFIX="$prefix"
+}
+
+get_oci_prefix() {
+    if [[ -z "$SEC_LIST_OCID" ]]; then
+        fail "SEC_LIST_OCID is not configured."
+    fi
+    log_info "Retrieving current OCI rule $(highlight "$RULE_DESCRIPTION" "$CYAN")"
+    local rules_json
+    if ! rules_json=$(oci network security-list get --security-list-id "$SEC_LIST_OCID" --query 'data."ingress-security-rules"' --raw-output 2>>"$LOG_FILE"); then
+        fail "Failed to query OCI security list."
+    fi
+    EXISTING_PREFIX=$(jq -r --arg desc "$RULE_DESCRIPTION" '.[] | select(.description == $desc) | .source' <<<"$rules_json")
+    if [[ -z "$EXISTING_PREFIX" || "$EXISTING_PREFIX" == "null" ]]; then
+        fail "Rule $(highlight "$RULE_DESCRIPTION" "$CYAN") not found in security list."
+    fi
+    RULES_JSON="$rules_json"
+    log_info "Current OCI prefix is $(highlight "$EXISTING_PREFIX" "$MAGENTA")"
+}
+
+update_oci_rule() {
+    if [[ "$CURRENT_PREFIX" == "$EXISTING_PREFIX" ]]; then
+        log_success "OCI security list already up to date."
+        return
+    fi
+    log_info "Updating OCI security list to $(highlight "$CURRENT_PREFIX" "$MAGENTA")"
+    local updated
+    if ! updated=$(jq -c --arg desc "$RULE_DESCRIPTION" --arg prefix "$CURRENT_PREFIX" \
+        'map(if .description == $desc then .source = $prefix | .source_type = "CIDR_BLOCK" else . end)' <<<"$RULES_JSON"); then
+        fail "Failed to build updated OCI rule payload."
+    fi
+    if ! oci network security-list update --security-list-id "$SEC_LIST_OCID" \
+        --ingress-security-rules "$updated" --force >>"$LOG_FILE" 2>&1; then
+        log_error "OCI update failed."
+        check_selinux_denials
+        if [[ "$STRICT_SELINUX" == "true" ]]; then
+            fail "Aborting due to OCI update failure."
+        fi
+        return 1
+    fi
+    log_success "OCI rule updated to $(highlight "$CURRENT_PREFIX" "$MAGENTA")"
+}
+
+update_local_firewall() {
+    log_info "Updating local firewalld ipset $(highlight "$IPSET_NAME" "$CYAN")"
+    if ! firewall-cmd --permanent --get-ipsets >/dev/null 2>&1; then
+        fail "firewalld ipsets are unsupported or firewalld is not running."
+    fi
+    if ! firewall-cmd --permanent --get-ipsets | grep -q "^$IPSET_NAME$"; then
+        firewall-cmd --permanent --new-ipset="$IPSET_NAME" --type=hash:net --family=ipv6 >/dev/null
+        log_info "Created ipset $(highlight "$IPSET_NAME" "$CYAN")"
+    fi
+    local entry
+    while read -r entry; do
+        [[ -z "$entry" ]] && continue
+        firewall-cmd --permanent --ipset="$IPSET_NAME" --remove-entry="$entry" >/dev/null || true
+    done < <(firewall-cmd --permanent --ipset="$IPSET_NAME" --get-entries 2>/dev/null || true)
+    firewall-cmd --permanent --ipset="$IPSET_NAME" --add-entry="$CURRENT_PREFIX" >/dev/null
+    if ! firewall-cmd --permanent --zone=public --query-rich-rule="rule family=ipv6 source ipset=$IPSET_NAME accept" >/dev/null 2>&1; then
+        firewall-cmd --permanent --zone=public --add-rich-rule="rule family=ipv6 source ipset=$IPSET_NAME accept" >/dev/null
+    fi
+    if ! firewall-cmd --reload >/dev/null 2>&1; then
+        log_error "firewalld reload failed (possible SELinux denial)."
+        check_selinux_denials
+        if [[ "$STRICT_SELINUX" == "true" ]]; then
+            fail "Aborting because firewalld reload failed."
+        fi
+        return 1
+    fi
+    log_success "Local firewalld updated with prefix $(highlight "$CURRENT_PREFIX" "$MAGENTA")"
+}
+update_remote_firewalls() {
+    local host
+    local local_host
+    local target
+    local_host=$(hostname -f 2>/dev/null || hostname)
+    for host in "${EXTRA_HOSTS[@]}"; do
+        [[ -z "$host" ]] && continue
+        if [[ "$host" == "$local_host" || "$host" == "$(hostname)" ]]; then
+            log_info "Skipping local host entry $(highlight "$host" "$CYAN") (already updated)."
+            continue
+        fi
+        target="$host"
+        if [[ "$host" != *@* ]]; then
+            target="root@$host"
+        fi
+        log_info "Updating remote host $(highlight "$target" "$CYAN")"
+        if ssh "${SSH_OPTIONS[@]}" "$target" bash -s -- "$IPSET_NAME" "$CURRENT_PREFIX" <<'REMOTE'
+set -euo pipefail
+IPSET_NAME="$1"
+PREFIX="$2"
+if ! command -v firewall-cmd >/dev/null 2>&1; then
+    echo "firewall-cmd not found" >&2
+    exit 1
+fi
+if ! firewall-cmd --permanent --get-ipsets >/dev/null 2>&1; then
+    echo "ipsets unsupported" >&2
+    exit 1
+fi
+if ! firewall-cmd --permanent --get-ipsets | grep -q "^${IPSET_NAME}$"; then
+    firewall-cmd --permanent --new-ipset="${IPSET_NAME}" --type=hash:net --family=ipv6 >/dev/null
+fi
+existing=$(firewall-cmd --permanent --ipset="${IPSET_NAME}" --get-entries 2>/dev/null || true)
+for entry in $existing; do
+    [[ -z "$entry" ]] && continue
+    firewall-cmd --permanent --ipset="${IPSET_NAME}" --remove-entry="$entry" >/dev/null || true
+done
+firewall-cmd --permanent --ipset="${IPSET_NAME}" --add-entry="$PREFIX" >/dev/null
+if ! firewall-cmd --permanent --zone=public --query-rich-rule="rule family=ipv6 source ipset=${IPSET_NAME} accept" >/dev/null 2>&1; then
+    firewall-cmd --permanent --zone=public --add-rich-rule="rule family=ipv6 source ipset=${IPSET_NAME} accept" >/dev/null
+fi
+firewall-cmd --reload >/dev/null
+REMOTE
+        then
+            log_success "Remote host $(highlight "$target" "$CYAN") updated."
+        else
+            log_warn "Failed to update remote host $(highlight "$target" "$CYAN")."
+            if [[ "$STRICT_SELINUX" == "true" ]]; then
+                log_warn "Consider running manually: $(highlight "ssh $target 'sudo firewall-cmd ...'" "$CYAN")"
+            fi
+        fi
     done
 }
 
-install_service() {
-    echo "Installing systemd service and timer..."
+run_update() {
+    ensure_log_file
+    load_config
+    check_dependencies
+    ensure_selinux_contexts
+    fetch_prefix
+    get_oci_prefix
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_warn "Dry run enabled - no changes will be applied."
+        log_info "Would update OCI prefix from $(highlight "$EXISTING_PREFIX" "$MAGENTA") to $(highlight "$CURRENT_PREFIX" "$MAGENTA")"
+        log_info "Would update local firewalld ipset $(highlight "$IPSET_NAME" "$CYAN")"
+        log_info "Would update remote hosts: $(highlight "${EXTRA_HOSTS[*]}" "$CYAN")"
+        return
+    fi
+    update_oci_rule
+    update_local_firewall
+    update_remote_firewalls
+    log_success "IPv6 prefix synchronisation finished."
+}
 
-    read -p "OCI Security List OCID [$SEC_LIST_OCID]: " input
-    [ -n "$input" ] && SEC_LIST_OCID=$input
+# ----------------------------- Installation -----------------------------
+write_installation_script() {
+    install -D -m 755 "$0" "$INSTALL_PATH"
+    log_success "Installed runtime script to $(highlight "$INSTALL_PATH" "$MAGENTA")"
+}
 
-    read -p "Hosts to update (space-separated) [${EXTRA_HOSTS[*]}]: " input
-    [ -n "$input" ] && EXTRA_HOSTS=($input)
-
-    read -p "Timer interval [$TIMER_INTERVAL]: " input
-    [ -n "$input" ] && TIMER_INTERVAL=$input
-
-    # Copy script to /usr/local/bin
-    install -m 755 "$0" "$INSTALL_PATH"
-
-    cat > /etc/systemd/system/oci-update-ipv6-rule.service <<EOF
+write_systemd_unit() {
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Update OCI IPv6 Security List and host firewalls
 After=network-online.target
@@ -160,100 +511,109 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$INSTALL_PATH
+ExecStart=$INSTALL_PATH --auto
+StandardOutput=journal
+StandardError=journal
 EOF
 
-    cat > /etc/systemd/system/oci-update-ipv6-rule.timer <<EOF
+    cat > "$TIMER_FILE" <<EOF
 [Unit]
-Description=Run IPv6 prefix updater every $TIMER_INTERVAL
+Description=Run OCI IPv6 updater periodically
 
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=$TIMER_INTERVAL
-Unit=oci-update-ipv6-rule.service
+Unit=$(basename "$SERVICE_FILE")
+Persistent=true
 
 [Install]
 WantedBy=timers.target
 EOF
+    log_success "Wrote systemd service and timer."
+}
 
-    fix_selinux_contexts
+install_timer() {
+    local non_interactive="$1"
+    ensure_log_file
+    load_config
+    collect_configuration "$non_interactive"
+    save_config
+    write_installation_script
+    write_systemd_unit
+    ensure_selinux_contexts
     systemctl daemon-reload
-    systemctl enable --now oci-update-ipv6-rule.timer
-
-    log "Installed and started timer: ${YELLOW}$TIMER_INTERVAL${RESET}" "$GREEN"
-
-    # Check service health
-    if ! systemctl is-active --quiet oci-update-ipv6-rule.timer; then
-        log "⚠ Timer not active. Check systemd logs." "$YELLOW"
+    systemctl enable --now "$(basename "$TIMER_FILE")"
+    log_success "Enabled timer $(highlight "$(basename "$TIMER_FILE")" "$CYAN")"
+    log_info "Triggering initial run to validate configuration."
+    if ! "$INSTALL_PATH" --auto; then
+        log_warn "Initial run reported issues. Check logs at $(highlight "$LOG_FILE" "$CYAN")"
     fi
-    if ! systemctl is-enabled --quiet oci-update-ipv6-rule.timer; then
-        log "⚠ Timer not enabled on boot." "$YELLOW"
-    fi
+    check_systemd_unit "$(basename "$SERVICE_FILE")" || true
+    check_systemd_unit "$(basename "$TIMER_FILE")" || true
 }
 
-uninstall_service() {
-    log "Uninstalling service and timer..." "$BLUE"
-    systemctl disable --now oci-update-ipv6-rule.timer 2>/dev/null
-    rm -f /etc/systemd/system/oci-update-ipv6-rule.{service,timer}
-    rm -f "$INSTALL_PATH"
+uninstall_timer() {
+    ensure_log_file
+    if systemctl list-unit-files "$(basename "$TIMER_FILE")" >/dev/null 2>&1; then
+        systemctl disable --now "$(basename "$TIMER_FILE")" >/dev/null 2>&1 || true
+    fi
+    rm -f "$SERVICE_FILE" "$TIMER_FILE"
+    if [[ -f "$INSTALL_PATH" ]]; then
+        rm -f "$INSTALL_PATH"
+    fi
     systemctl daemon-reload
-    log "Uninstalled service, timer, and script." "$GREEN"
+    log_success "Removed systemd service, timer, and installed script."
 }
 
-# --- Main ---
-[[ "$1" == "-h" || "$1" == "--help" || -z "$1" ]] && usage
-[[ "$1" == "--install" ]] && install_service && exit 0
-[[ "$1" == "--uninstall" ]] && uninstall_service && exit 0
+# ----------------------------- Argument parsing -----------------------------
+DRY_RUN="false"
+ACTION="run"
+NON_INTERACTIVE="0"
 
-selinux_status
-log "--- Starting IPv6 update check ---" "$BLUE"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)
+            DRY_RUN="true"
+            ;;
+        --install)
+            ACTION="install"
+            ;;
+        --non-interactive)
+            NON_INTERACTIVE="1"
+            ;;
+        --uninstall)
+            ACTION="uninstall"
+            ;;
+        --health-check)
+            ACTION="health"
+            ;;
+        --auto)
+            ACTION="run"
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            show_usage
+            exit 1
+            ;;
+    esac
+    shift
+done
 
-get_prefix_ssh
-if [ -z "$CURRENT_PREFIX" ]; then
-    log "Error: could not determine IPv6 prefix" "$RED"
-    exit 1
-fi
-if ! [[ "$CURRENT_PREFIX" == */64 ]]; then
-    log "Error: not a /64 prefix: ${YELLOW}$CURRENT_PREFIX${RESET}" "$RED"
-    exit 1
-fi
-log "Discovered prefix: ${YELLOW}$CURRENT_PREFIX${RESET}"
-
-RULES_JSON=$(oci network security-list get --security-list-id "$SEC_LIST_OCID" --query "data.\"ingress-security-rules\"" 2>&1) || {
-    log "Error fetching rules from OCI" "$RED"
-    exit 1
-}
-
-EXISTING_PREFIX=$(echo "$RULES_JSON" | jq -r ".[] | select(.description==\"$RULE_DESCRIPTION\") | .source")
-if [ -z "$EXISTING_PREFIX" ] || [ "$EXISTING_PREFIX" == "null" ]; then
-    log "Error: Rule $RULE_DESCRIPTION not found" "$RED"
-    exit 1
-fi
-log "Current OCI prefix: ${YELLOW}$EXISTING_PREFIX${RESET}"
-
-if [ "$1" == "--dry-run" ]; then
-    log "[Dry run] Would update OCI if prefix differs" "$YELLOW"
-    log "[Dry run] Would update local firewall ipset to: ${YELLOW}$CURRENT_PREFIX${RESET}" "$YELLOW"
-    log "[Dry run] Would push update to: ${YELLOW}${EXTRA_HOSTS[*]}${RESET}" "$YELLOW"
-    exit 0
-fi
-
-if [ "$CURRENT_PREFIX" != "$EXISTING_PREFIX" ]; then
-    log "Updating OCI rule..." "$BLUE"
-    NEW_RULES_JSON=$(echo "$RULES_JSON" | jq "(.[] | select(.description==\"$RULE_DESCRIPTION\").source) |= \"$CURRENT_PREFIX\" ")
-    if oci network security-list update --security-list-id "$SEC_LIST_OCID" --ingress-security-rules "$NEW_RULES_JSON" --force; then
-        log "OCI updated to ${YELLOW}$CURRENT_PREFIX${RESET}" "$GREEN"
-    else
-        log "Failed to update OCI" "$RED"
-        check_avc
-        $STRICT_SELINUX && exit 1
-    fi
-else
-    log "OCI already up to date" "$GREEN"
-fi
-
-update_local_fw "$CURRENT_PREFIX"
-update_remote_fw "$CURRENT_PREFIX"
-
-log "--- IPv6 update check finished ---" "$BLUE"
-exit 0
+case "$ACTION" in
+    run)
+        run_update
+        ;;
+    install)
+        install_timer "$NON_INTERACTIVE"
+        ;;
+    uninstall)
+        uninstall_timer
+        ;;
+    health)
+        health_check
+        ;;
+esac
