@@ -149,7 +149,7 @@ update_remote_fw() {
         log "Updating firewall on ${YELLOW}$host${RESET} with prefix ${YELLOW}$prefix${RESET}"
         local env_assignments="PREFIX=$(printf '%q' "$prefix")"
         env_assignments+=" REMOTE_LOG_FILE=$(printf '%q' "$remote_log_file")"
-        env_assignments+=" STRICT_SELINUX_CMD=$strict_cmd"
+        env_assignments+=" STRICT_SELINUX_CMD=$(printf '%q' "$strict_cmd")"
         env_assignments+=" RED=$(printf '%q' "$RED")"
         env_assignments+=" GREEN=$(printf '%q' "$GREEN")"
         env_assignments+=" YELLOW=$(printf '%q' "$YELLOW")"
