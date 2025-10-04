@@ -201,9 +201,27 @@ uninstall_service() {
 }
 
 # --- Main ---
-[[ "$1" == "-h" || "$1" == "--help" || -z "$1" ]] && usage
-[[ "$1" == "--install" ]] && install_service && exit 0
-[[ "$1" == "--uninstall" ]] && uninstall_service && exit 0
+case "$1" in
+    -h|--help)
+        usage
+        ;;
+    --install)
+        install_service
+        exit 0
+        ;;
+    --uninstall)
+        uninstall_service
+        exit 0
+        ;;
+    ""|--dry-run)
+        # proceed with main workflow
+        ;;
+    *)
+        log "Unknown option: $1" "$RED"
+        log "Use --help to view usage information." "$YELLOW"
+        exit 1
+        ;;
+esac
 
 selinux_status
 log "--- Starting IPv6 update check ---" "$BLUE"
