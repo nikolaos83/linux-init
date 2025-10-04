@@ -131,9 +131,49 @@ update_local_fw() {
 
 update_remote_fw() {
     local prefix=$1
+    local remote_log_file="$LOG_FILE"
+    local strict_cmd
+    case "$STRICT_SELINUX" in
+        [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn])
+            strict_cmd=true
+            ;;
+        *)
+            strict_cmd=false
+            ;;
+    esac
+
+    local helper_defs
+    helper_defs="$(typeset -f log check_avc update_local_fw)"
+
     for host in "${EXTRA_HOSTS[@]}"; do
         log "Updating firewall on ${YELLOW}$host${RESET} with prefix ${YELLOW}$prefix${RESET}"
-        ssh "root@$host" "$(typeset -f update_local_fw); update_local_fw $prefix"
+        local env_assignments="PREFIX=$(printf '%q' "$prefix")"
+        env_assignments+=" REMOTE_LOG_FILE=$(printf '%q' "$remote_log_file")"
+        env_assignments+=" STRICT_SELINUX_CMD=$strict_cmd"
+        env_assignments+=" RED=$(printf '%q' "$RED")"
+        env_assignments+=" GREEN=$(printf '%q' "$GREEN")"
+        env_assignments+=" YELLOW=$(printf '%q' "$YELLOW")"
+        env_assignments+=" BLUE=$(printf '%q' "$BLUE")"
+        env_assignments+=" RESET=$(printf '%q' "$RESET")"
+
+        ssh "root@$host" "$env_assignments bash -s" <<EOF
+LOG_FILE="\${REMOTE_LOG_FILE:-$remote_log_file}"
+log_dir="\${LOG_FILE%/*}"
+if ! mkdir -p "\$log_dir" 2>/dev/null || ! touch "\$LOG_FILE" 2>/dev/null; then
+    LOG_FILE="/tmp/oci_ipv6_update_remote.log"
+    log_dir="\${LOG_FILE%/*}"
+    mkdir -p "\$log_dir" 2>/dev/null
+    touch "\$LOG_FILE" 2>/dev/null
+fi
+export LOG_FILE
+export RED GREEN YELLOW BLUE RESET
+
+$helper_defs
+
+STRICT_SELINUX=\${STRICT_SELINUX_CMD:-false}
+export STRICT_SELINUX
+update_local_fw "\$PREFIX"
+EOF
     done
 }
 
