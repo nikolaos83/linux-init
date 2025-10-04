@@ -159,11 +159,12 @@ update_remote_fw() {
         ssh "root@$host" "$env_assignments bash -s" <<EOF
 LOG_FILE="\${REMOTE_LOG_FILE:-$remote_log_file}"
 log_dir="\${LOG_FILE%/*}"
-if ! mkdir -p "\$log_dir" 2>/dev/null || ! touch "\$LOG_FILE" 2>/dev/null; then
-    LOG_FILE="/tmp/oci_ipv6_update_remote.log"
-    log_dir="\${LOG_FILE%/*}"
-    mkdir -p "\$log_dir" 2>/dev/null
-    touch "\$LOG_FILE" 2>/dev/null
+if ! (mkdir -p "$log_dir" && touch "$LOG_FILE") >/dev/null 2>&1; then
+    LOG_FILE="/tmp/oci_ipv6_update_remote.$$.log"
+    if ! (mkdir -p "${LOG_FILE%/*}" && touch "$LOG_FILE") >/dev/null 2>&1; then
+        echo "Remote: Failed to create log file at primary or fallback location. Logging to /dev/null." >&2
+        LOG_FILE=/dev/null
+    fi
 fi
 export LOG_FILE
 export RED GREEN YELLOW BLUE RESET
